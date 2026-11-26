@@ -1,0 +1,1 @@
+"""Resultado esperado: a documentar."""
