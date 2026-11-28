@@ -122,3 +122,71 @@ def test_erros_de_fases_anteriores_nao_sao_semanticos():
         executar("x = @;")
     with pytest.raises(ErroSintatico):
         executar("x = (1 + ;")
+
+@pytest.mark.parametrize("fonte", [
+    "x=" + "9" * 640 + "; print(x+1);",
+    "x=-" + "9" * 640 + "; print(x-1);",
+    "x=1;for(i=0;i<4301;i=i+1){x=x*10;}print(x);",
+])
+def test_inteiro_calculado_excessivo_tem_diagnostico(fonte):
+    e = erro_de(fonte)
+    assert "valor inteiro excedeu o limite de 640 dígitos" in e.mensagem
+    assert e.linha > 0 and e.coluna > 0
+
+
+@pytest.mark.parametrize("termos", [100, 1500])
+def test_expressao_extensa_tem_diagnostico(termos):
+    e = erro_de("print(" + "+".join(["1"] * termos) + ");")
+    assert "limite de 100 níveis" in e.mensagem
+    assert e.linha == 1 and e.coluna > 0
+
+
+def test_formatacao_direta_rejeita_inteiro_excessivo():
+    from src.interpreter import formatar_valor
+    with pytest.raises(ErroSemantico, match="limite de 640 dígitos"):
+        formatar_valor(10 ** 640)
+
+
+def test_interpretador_pode_ser_reutilizado_apos_erro_de_profundidade():
+    from src.interpreter import Interpretador
+    from src.parser import analisar
+    saida = []
+    interp = Interpretador(saida=saida.append)
+    with pytest.raises(ErroSemantico, match="profundidade"):
+        interp.executar(analisar("print(" + "+".join(["1"] * 1500) + ");"))
+    interp.executar(analisar("print(42);"))
+    assert saida == ["42"]
+
+
+def test_cli_arquivo_utf8_invalido(tmp_path, capsys):
+    from src.interpreter import main
+    arquivo = tmp_path / "invalido.ml"
+    arquivo.write_bytes(b"\xff")
+    assert main([str(arquivo)]) == 2
+    saida = capsys.readouterr()
+    assert saida.out == ""
+    assert "UTF-8 válido" in saida.err
+    assert "Traceback" not in saida.err
+
+
+@pytest.mark.parametrize("fonte,categoria", [
+    ("x=" + "9" * 4301 + ";", "sintático"),
+    ("x=1;for(i=0;i<4301;i=i+1){x=x*10;}print(x);", "semântico"),
+    ("print(" + "(" * 150 + "1" + ")" * 150 + ");", "sintático"),
+    ("print(" + "+".join(["1"] * 1500) + ");", "semântico"),
+])
+def test_cli_limites_sem_traceback(fonte, categoria, tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    arquivo = tmp_path / "limite.ml"
+    arquivo.write_text(fonte, encoding="utf8")
+    processo = subprocess.run(
+        [sys.executable, "-X", "utf8", "-B", "-m", "src.interpreter", str(arquivo)],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True,
+        text=True, encoding="utf8", timeout=10,
+    )
+    assert processo.returncode == 1
+    assert processo.stdout == ""
+    assert f"Erro {categoria} [linha " in processo.stderr
+    assert "Traceback" not in processo.stderr

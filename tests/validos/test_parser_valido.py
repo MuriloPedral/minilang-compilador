@@ -158,3 +158,10 @@ def test_arquivo_exemplos_programa_valido():
     prog = analisar((RAIZ / "exemplos" / "programa_valido.ml").read_text(encoding="utf-8"))
     tipos = {type(c).__name__ for c in prog.comandos}
     assert {"While", "For", "If"} <= tipos
+
+def test_limites_sintaticos_aceitam_a_fronteira():
+    from src.parser import MAX_ANINHAMENTO_SINTATICO, MAX_DIGITOS_INTEIRO
+    assert expr("9" * MAX_DIGITOS_INTEIRO).valor == 10 ** 640 - 1
+    assert expr("(" * MAX_ANINHAMENTO_SINTATICO + "1" + ")" * MAX_ANINHAMENTO_SINTATICO) == I(1)
+    assert analisar("{" * MAX_ANINHAMENTO_SINTATICO + "}" * MAX_ANINHAMENTO_SINTATICO)
+    assert expr("-" * MAX_ANINHAMENTO_SINTATICO + "1")

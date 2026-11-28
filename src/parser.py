@@ -32,6 +32,11 @@ from .ast_nodes import (
 from .lexer import ErroMiniLang, Token, tokenizar
 
 
+# Limites de implementação; não alteram as produções da gramática.
+MAX_DIGITOS_INTEIRO = 640
+MAX_ANINHAMENTO_SINTATICO = 50
+
+
 class ErroSintatico(ErroMiniLang):
     categoria = "sintático"
 
@@ -81,10 +86,35 @@ class Parser:
     # ------------------------------------------------------------------
 
     def programa(self) -> Programa:
+        self._verificar_aninhamento()
         comandos: list[Comando] = []
-        while not self._ver("EOF"):
-            comandos.append(self.comando())
+        try:
+            while not self._ver("EOF"):
+                comandos.append(self.comando())
+        except RecursionError:
+            # Salvaguarda para ambientes com uma pilha disponível menor.
+            raise self._erro("profundidade sintática excedeu a capacidade de análise") from None
         return Programa(comandos, linha=1, coluna=1)
+
+    def _verificar_aninhamento(self) -> None:
+        """Limita delimitadores e sequências de menos antes da análise recursiva."""
+        nivel = sinais = 0
+        for token in self.tokens:
+            if token.tipo in ("LPAREN", "LBRACE"):
+                nivel += 1
+                if nivel > MAX_ANINHAMENTO_SINTATICO:
+                    raise ErroSintatico(
+                        f"aninhamento sintático excedeu o limite de {MAX_ANINHAMENTO_SINTATICO} níveis",
+                        token.linha, token.coluna,
+                    )
+            elif token.tipo in ("RPAREN", "RBRACE"):
+                nivel = max(0, nivel - 1)
+            sinais = sinais + 1 if token.tipo == "MINUS" else 0
+            if sinais > MAX_ANINHAMENTO_SINTATICO:
+                raise ErroSintatico(
+                    f"sequência de '-' excedeu o limite de {MAX_ANINHAMENTO_SINTATICO} sinais",
+                    token.linha, token.coluna,
+                )
 
     # ------------------------------------------------------------------
     # comando = atribuicao ";" | print ";" | if | while | for | bloco ;
@@ -240,6 +270,11 @@ class Parser:
         t = self.atual
         if t.tipo == "INT":
             self._avancar()
+            if len(t.lexema) > MAX_DIGITOS_INTEIRO:
+                raise ErroSintatico(
+                    f"literal inteiro excedeu o limite de {MAX_DIGITOS_INTEIRO} dígitos",
+                    t.linha, t.coluna,
+                )
             return Inteiro(int(t.lexema), linha=t.linha, coluna=t.coluna)
         if t.tipo in ("TRUE", "FALSE"):
             self._avancar()

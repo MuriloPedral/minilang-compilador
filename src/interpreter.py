@@ -25,9 +25,11 @@ from .ast_nodes import (
     OpBinaria, OpUnaria, Print, Programa, Variavel, While,
 )
 from .lexer import ErroMiniLang
-from .parser import analisar
+from .parser import MAX_DIGITOS_INTEIRO, analisar
 
 MAX_ITERACOES_PADRAO = 10_000
+MAX_PROFUNDIDADE_EXECUCAO = 100
+_LIMITE_INTEIRO = 10 ** MAX_DIGITOS_INTEIRO
 
 Valor = int | bool
 
@@ -46,7 +48,16 @@ def tipo_de(valor: Valor) -> str:
     return "bool" if type(valor) is bool else "int"
 
 
+def _validar_inteiro(valor: Valor, linha: int = 0, coluna: int = 0) -> None:
+    if type(valor) is int and abs(valor) >= _LIMITE_INTEIRO:
+        raise ErroSemantico(
+            f"valor inteiro excedeu o limite de {MAX_DIGITOS_INTEIRO} dígitos",
+            linha, coluna,
+        )
+
+
 def formatar_valor(valor: Valor) -> str:
+    _validar_inteiro(valor)
     if type(valor) is bool:
         return "true" if valor else "false"
     return str(valor)
@@ -112,6 +123,7 @@ class Interpretador:
         self.tabela = TabelaSimbolos()
         self.saida = saida if saida is not None else print
         self.max_iteracoes = max_iteracoes
+        self._profundidade = 0
 
     def executar(self, programa: Programa) -> None:
         for comando in programa.comandos:
@@ -121,8 +133,22 @@ class Interpretador:
     # Comandos
     # ------------------------------------------------------------------
 
+    def _entrar(self, no: No) -> None:
+        if self._profundidade >= MAX_PROFUNDIDADE_EXECUCAO:
+            raise ErroSemantico(
+                f"execução excedeu o limite de {MAX_PROFUNDIDADE_EXECUCAO} níveis de profundidade",
+                no.linha, no.coluna,
+            )
+        self._profundidade += 1
+
     def _executar(self, no: No) -> None:
-        getattr(self, f"_exec_{type(no).__name__.lower()}")(no)
+        self._entrar(no)
+        try:
+            getattr(self, f"_exec_{type(no).__name__.lower()}")(no)
+        except RecursionError:
+            raise ErroSemantico("profundidade excedeu a capacidade de execução", no.linha, no.coluna) from None
+        finally:
+            self._profundidade -= 1
 
     def _exec_atribuicao(self, no: Atribuicao) -> None:
         valor = self._avaliar(no.valor)
@@ -179,7 +205,15 @@ class Interpretador:
     # ------------------------------------------------------------------
 
     def _avaliar(self, no: Expressao) -> Valor:
-        return getattr(self, f"_aval_{type(no).__name__.lower()}")(no)
+        self._entrar(no)
+        try:
+            valor = getattr(self, f"_aval_{type(no).__name__.lower()}")(no)
+            _validar_inteiro(valor, no.linha, no.coluna)
+            return valor
+        except RecursionError:
+            raise ErroSemantico("profundidade excedeu a capacidade de execução", no.linha, no.coluna) from None
+        finally:
+            self._profundidade -= 1
 
     def _aval_inteiro(self, no: Inteiro) -> Valor:
         return no.valor
@@ -279,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with open(argv[0], encoding="utf-8") as f:
             fonte = f.read()
+    except UnicodeDecodeError:
+        print(f"não foi possível ler '{argv[0]}': arquivo não está em UTF-8 válido", file=sys.stderr)
+        return 2
     except OSError as e:
         print(f"não foi possível ler '{argv[0]}': {e.strerror}", file=sys.stderr)
         return 2

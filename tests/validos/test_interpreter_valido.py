@@ -128,3 +128,17 @@ def test_arquivo_exemplos_programa_valido():
 def test_interpretador_usa_print_por_padrao(capsys):
     Interpretador().executar(analisar("print(42);"))
     assert capsys.readouterr().out == "42\n"
+
+def test_inteiro_na_fronteira_pode_ser_calculado_e_impresso():
+    maior = "9" * 640
+    assert rodar(f"print({maior}); print(-{maior});") == [maior, "-" + maior]
+    assert rodar("x=1;for(i=0;i<639;i=i+1){x=x*10;}print(x);") == ["1" + "0" * 639]
+
+
+def test_profundidade_de_execucao_na_fronteira():
+    # Print + 98 operadores + literal = 100 chamadas simultâneas.
+    assert rodar("print(" + "+".join(["1"] * 99) + ");") == ["99"]
+
+
+def test_limite_de_profundidade_nao_acumula_entre_comandos():
+    assert rodar("print(1);" * 1500) == ["1"] * 1500

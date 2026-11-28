@@ -130,3 +130,21 @@ def test_arquivo_exemplos_programa_invalido():
     e = erro_de((RAIZ / "exemplos" / "programa_invalido.ml").read_text(encoding="utf-8"))
     assert "após a condição do for" in e.mensagem
     assert e.linha == 13
+
+# Limites de recursos: resultados esperados são diagnósticos, nunca traceback.
+@pytest.mark.parametrize("digitos", [641, 4301])
+def test_literal_grande_tem_diagnostico(digitos):
+    e = erro_de("x=" + "9" * digitos + ";")
+    assert "limite de 640 dígitos" in e.mensagem
+    assert (e.linha, e.coluna) == (1, 3)
+
+
+@pytest.mark.parametrize("fonte", [
+    "print(" + "(" * 150 + "1" + ")" * 150 + ");",
+    "{" * 51 + "}" * 51,
+    "x=" + "-" * 51 + "1;",
+])
+def test_aninhamento_excessivo_tem_diagnostico(fonte):
+    e = erro_de(fonte)
+    assert "limite de 50" in e.mensagem
+    assert e.linha == 1 and e.coluna > 0
