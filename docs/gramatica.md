@@ -88,16 +88,50 @@ primaria       = INT
 
 ### Propriedades da gramática
 
-1. **Sem recursão à esquerda.** Nenhuma produção começa com o próprio não terminal.
-   As repetições de operadores usam `{ ... }`, o que permite análise descendente recursiva.
-2. **LL(1).** Em toda escolha entre alternativas, o primeiro token decide a produção:
-   - `comando`: FIRST(atribuicao) = {ID}, FIRST(print) = {print}, FIRST(if) = {if},
-     FIRST(while) = {while}, FIRST(for) = {for}, FIRST(bloco) = {`{`}. Conjuntos disjuntos.
-   - `unaria`: `-` versus FIRST(primaria) = {INT, true, false, ID, `(`}. Disjuntos.
-   - `primaria`: cinco alternativas com primeiros tokens distintos.
-   - `if`: o `[ "else" bloco ]` é decidido olhando se o próximo token é `else`.
-3. **Sem ambiguidade de `else` pendente** (dangling else): como o corpo do `if` é
-   obrigatoriamente um `bloco` com chaves, `if (a) { if (b) { } } else { }` só tem uma árvore.
+**Ausência de recursão à esquerda direta e indireta.** Não basta procurar uma
+produção que comece por si própria: também é necessário excluir um caminho
+`A ⇒+ A α` por outros não terminais antes de consumir um terminal. Nesta
+gramática, a cadeia inicial das expressões segue `expressao → igualdade →
+relacional → aditiva → multiplicativa → unaria → primaria`, sem retorno à
+esquerda. A volta de `primaria` para `expressao` exige consumir `(`; a recursão
+de `unaria` exige consumir `-`. Nos comandos, atribuições começam por `ID`,
+blocos por `{` e os controles por suas palavras reservadas. As repetições EBNF
+podem ser expandidas como `lista = item lista | ε`, com item não anulável:
+consome-se pelo menos um token antes de voltar à lista. Os sufixos opcionais
+começam por operadores ou `else`. Logo não há ciclo de chamadas à esquerda
+que retorne ao mesmo não terminal sem consumir entrada.
+
+**Escolhas LL(1).** O parser usa um token de antecipação. Em `comando`, os
+conjuntos FIRST das alternativas são, respectivamente, `{ID}`, `{print}`,
+`{if}`, `{while}`, `{for}` e o conjunto unitário com o token `{`: disjuntos. Em `unaria`, `-` distingue-se
+de FIRST(primaria) = `{INT, true, false, ID, (}`. As cinco alternativas de
+`primaria` também têm inícios diferentes.
+
+As alternativas vazias exigem conferir FOLLOW, além de FIRST. Para resumir:
+`C = FIRST(comando)`, `D = {), ;}`, `I = {==, !=}`,
+`R = {<, >, <=, >=}` e `A = {+, -}`. `C` inclui o token de abertura de bloco `{`; `ε` denota a alternativa vazia.
+
+| Escolha EBNF | FIRST da continuação não vazia | FOLLOW do auxiliar na expansão BNF (quando escolher ε) |
+|-------------|--------------------------------|----------------------------------------------------------------------|
+| Repetição de comandos | C | EOF ou `}` |
+| Sufixo opcional de `else` | `else` | C, EOF ou `}` |
+| Sufixo opcional de igualdade | I | D |
+| Sufixo opcional relacional | R | I ou D |
+| Repetição aditiva | A | R, I ou D |
+| Repetição multiplicativa | `*` ou `/` | A, R, I ou D |
+
+Em cada linha, FIRST da continuação e FOLLOW do auxiliar são disjuntos.
+As escolhas internas de operadores têm tokens distintos. Na expansão BNF
+usada na auditoria (com `print` e controles expandidos em `comando`), foram
+obtidos 17 não terminais, 39 produções e 107 células preenchidas na tabela
+preditiva, sem conflitos. Esses números dependem da expansão escolhida;
+o argumento aplicável à EBNF é a disjunção das escolhas descritas acima.
+Um token fora dos conjuntos esperados leva a diagnóstico, não à aceitação.
+
+**Sem `else` pendente.** Os corpos exigem blocos com chaves. Em
+`if (a) { if (b) { } } else { }`, o fechamento dos blocos determina o dono
+do `else`; ele não pertence a FOLLOW do sufixo opcional do `if` interno.
+Não existe produção `else if`; o `else` deve ser seguido de bloco.
 
 ---
 
@@ -124,6 +158,28 @@ de uma `multiplicativa` antes de participar da soma.
 - `[ op relacional ]` permite **no máximo um** operador por nível. `1 < 2 < 3` não é
   derivável: comparações são não associativas (o encadeamento não tem significado
   útil numa linguagem com tipos `int` e `bool` separados).
+
+### Regras semânticas adotadas
+
+As regras de tipos são verificadas durante a interpretação, no caminho
+executado. Não há análise estática de todos os ramos.
+
+- Valores são `int` ou `bool`, tratados como tipos distintos mesmo que Python
+  permita usar booleanos como inteiros. A variável guarda o tipo do valor atual:
+  `x = 1; x = true;` é permitido.
+- A atribuição avalia o lado direito antes de inserir/atualizar o símbolo.
+  Ler uma variável sem atribuição anterior no caminho executado gera erro.
+- `+`, `-`, `*`, `/`, menos unário e relações de ordem exigem inteiros.
+  A divisão inteira trunca em direção a zero: `-7 / 2` resulta em `-3`.
+  Divisor zero produz erro semântico.
+- `==` e `!=` exigem operandos do mesmo tipo. A não associatividade é por
+  nível: `1 < 2 < 3` é rejeitado, mas `1 < 2 == true` é válido.
+- `if`, `while` e `for` exigem condição booleana, sem conversão implícita.
+  `for` executa inicialização uma vez; depois condição, corpo e atualização.
+- Blocos compartilham uma tabela de símbolos global; chaves não criam escopo.
+  `print` apresenta booleanos como `true`/`false`. Expressões binárias avaliam
+  o operando esquerdo antes do direito.
+- Programa e bloco vazios são válidos. Os limites de recursos estão na seção 6.
 
 ---
 
@@ -164,8 +220,8 @@ z = 3abc;
 do estado inicial q0, a classe `outro` não tem transição (seção 5.3), então o
 autômato para em um estado de não aceitação. Se o `@` fosse removido, a linha 3
 também seria rejeitada: `3abc` leva o autômato de q2 (inteiro) a q3 (número
-malformado), que não é estado de aceitação, pois nenhuma expressão regular de token
-descreve um dígito seguido de letra.
+malformado), que não é estado de aceitação. Essa rejeição é uma regra léxica
+adicional: sem ela, as regex isoladas permitiriam separar `3` e `abc`.
 
 ### Exemplo 3: inválido, erro sintático (laço for mal formado)
 
@@ -221,9 +277,10 @@ print(a / b);
 **Justificativa:** ambos são sintaticamente válidos. No primeiro, a variável usada
 na condição do laço (`j`) nunca foi inserida na tabela de símbolos: a restrição
 "toda variável deve ser atribuída antes de ser lida" é violada. No segundo, o
-divisor `b` só é conhecido em tempo de execução (vale `0`), o que mostra por que a
-verificação semântica precisa ser feita durante a interpretação e não apenas
-analisando o texto.
+divisor `b` é conferido durante a execução e vale `0`. Neste exemplo, uma
+análise estática com propagação de constantes também poderia descobrir o zero;
+o projeto escolhe a verificação dinâmica para tratar uniformemente valores e
+caminhos de execução, sem implementar essa análise adicional.
 
 ---
 
@@ -258,9 +315,10 @@ analisando o texto.
 | `LBRACE` | `\{` | `{` |
 | `RBRACE` | `\}` | `}` |
 | `SEMI` | `;` | `;` |
+| `EOF` | marcador sintético de fim de entrada | emitido uma vez após a leitura |
 | (descartado) espaço | `[ \t\r\n]+` | espaços e quebras de linha |
 | (descartado) comentário de linha | `//[^\n]*` | `// comentário` |
-| (descartado) comentário de bloco | `/\*([^*]|\*+[^*/])*\*+/` | `/* comentário */` |
+| (descartado) comentário de bloco | `/\*([^*]\|\*+[^*/])*\*+/` | `/* comentário */` |
 
 **Regras de desempate:**
 1. **Maior casamento:** o lexer consome o lexema mais longo possível. `<=` é um `LE`,
@@ -343,13 +401,95 @@ Legenda: `→` estado inicial; `*` estado de aceitação; célula vazia = sem tr
 | q17 | `DIF` | `!=` | emite `NE` |
 | q18 a q25 | `MAIS` ... `PVIRG` | `+ - * ( ) { } ;` | emite o token correspondente |
 
-**Construção:** cada expressão regular da seção 5.1 foi convertida em um AFD; os
-autômatos foram unidos por um estado inicial comum (q0) e determinizados. Os
-prefixos compartilhados ficaram em um único estado: `<` e `<=` compartilham q10;
-`=` e `==` compartilham q14; `/`, `//` e `/*` compartilham q5. Os estados q3, q7, q8
-e q16 não são de aceitação: eles existem para que o lexer saiba **qual** erro reportar.
+### 5.5 Justificativa do reconhecimento e correspondência com o código
 
-**Correspondência com o código:** esta tabela é exatamente o dicionário
-`TRANSICOES` de `src/lexer.py` (os nomes da coluna "Nome no código" são as chaves
-usadas lá). O teste `test_todo_estado_de_aceitacao_e_alcancavel_pela_tabela`
-verifica a consistência entre a tabela de transições e a de aceitação.
+A implementação constrói diretamente uma tabela determinística por classes
+de caracteres em `_construir_transicoes`. A justificativa abaixo relaciona
+seus estados às expressões regulares; não afirma que foram materializadas
+etapas intermediárias de AFN, união ou determinização que não estão registradas.
+
+Para uma classe e estado existe no máximo um destino. Células ausentes são
+transições de parada do reconhecedor de um lexema: a aceitação é decidida pelo
+estado atual, sem consumir o próximo caractere. Formalmente, os autômatos dos
+lexemas podem ser totalizados com um estado poço não final; o scanner mantém
+a decisão de fronteira do token separada dessa apresentação do autômato.
+
+Os seguintes invariantes decorrem das transições, por indução sobre os
+caracteres consumidos a partir de q0:
+
+| Família de estados | Invariante e decisão |
+|-------------------|----------------------|
+| q1 (`ID`) | O primeiro caractere é letra ASCII ou `_`; os seguintes são letras, `_` ou dígitos. Só essas classes mantêm q1. Ao parar, emite ID ou reclassifica uma palavra reservada. |
+| q2 (`INT`) | O prefixo é não vazio e só contém dígitos. Outro dígito mantém q2; letra ou `_` leva obrigatoriamente a q3. |
+| q3 (`NUM_MAL`) | O prefixo começou com dígitos e passou a conter letra ou `_`; letras e dígitos completam a sequência malformada. É estado não final: gera erro, sem voltar para emitir o prefixo numérico. |
+| q4 | Só foram consumidos espaços, tabulações, CR ou LF; a sequência é descartada. |
+| q5 e q6 | q5 reconhece `/`; um segundo `/` leva a q6, que consome até antes de LF ou até EOF e descarta o comentário. CR isolado é conteúdo do comentário, conforme `//[^\n]*`. |
+| q7, q8 e q9 | Depois de `/*`, q7 está no corpo; q8 guarda uma ou mais estrelas finais; somente `/` a partir de q8 encerra em q9. Só q9 aceita o comentário completo. EOF em q7/q8 produz erro. Não há comentários de bloco aninhados. |
+| Operadores e delimitadores | Os caminhos de um caractere reconhecem os símbolos da tabela. Os prefixos `<`, `>`, `=` e `!` distinguem as versões com `=`; `!` isolado termina em estado não final. |
+
+Assim, um estado final só emite o padrão correspondente da tabela 5.1; espaços
+e comentários completos são reconhecidos e descartados. Reciprocamente, um
+lexema que satisfaz um desses padrões percorre as transições dessa família e
+chega ao estado final apropriado, respeitadas as fronteiras e a política de
+sequências malformadas. Caracteres não reconhecidos a partir de q0 geram erro.
+
+**Regra de `1x`.** Os padrões de INT e ID, isoladamente, permitiriam os tokens
+`1` e `x`. O enunciado exige rejeitar essa entrada; por isso a transição
+q2 → q3 ao ler letra/`_` tem precedência sobre a emissão do prefixo INT.
+Isso não é consequência apenas do maior casamento. O mesmo comprometimento
+com o prefixo `/*` exige erro em comentário não fechado, sem voltar a emitir
+`/` e `*` como operadores. Para as entradas válidas, os ciclos de ID, INT e
+os operadores de dois caracteres implementam o reconhecimento mais longo
+permitido. Palavras reservadas são reclassificadas após ler o ID inteiro.
+
+Ao avançar em LF, o lexer incrementa a linha e reinicia a coluna em 1;
+nos demais caracteres incrementa a coluna em uma unidade, inclusive tabulações.
+A CLI usa a normalização de quebras de linha da leitura textual do Python.
+EOF é acrescentado explicitamente, sem lexema, na posição após o último caractere.
+O limite de tamanho de INT é aplicado depois, no parser (seção 6).
+
+As 468 células da tabela 5.3 correspondem ao dicionário `TRANSICOES`, usando
+o mapa de nomes da seção 5.4. A auditoria conferiu essa correspondência.
+O teste chamado `test_todo_estado_de_aceitacao_e_alcancavel_pela_tabela`
+verifica apenas se os estados finais aparecem como destinos; não demonstra
+sozinho alcance desde q0. Testes e comparação de tabelas fornecem evidência
+de implementação, não substituem a justificativa pelos invariantes.
+
+## 6. Limites operacionais da implementação
+
+As produções anteriores descrevem a sintaxe. A implementação didática aplica
+limites de recursos adicionais; uma entrada derivável pode ser rejeitada ao
+excedê-los. Esses diagnósticos não significam que a gramática deixou de ser LL(1).
+
+| Recurso | Limite e comportamento |
+|---------|------------------------|
+| Literal inteiro | Até 640 caracteres decimais, incluindo zeros à esquerda e sem contar o sinal, que é operador unário. O parser rejeita literais maiores com `ErroSintatico`, na posição do literal. |
+| Valor inteiro | De `-(10**640 - 1)` a `10**640 - 1`. Cada expressão avaliada deve respeitar essa faixa, inclusive resultados intermediários; excedê-la produz `ErroSemantico` na expressão responsável. A impressão também verifica a faixa antes da conversão decimal. |
+| Aninhamento sintático | Até 50 delimitadores abertos simultaneamente, contando parênteses e chaves juntos. O parser faz uma verificação iterativa dos tokens antes da análise recursiva. Os parênteses de `print`, `if`, `while` e `for` também contam. |
+| Sinais consecutivos | Até 50 tokens `MINUS` consecutivos. Essa verificação evita recursão excessiva em `unaria`; inclui um eventual menos binário anterior à sequência unária. |
+| Profundidade na execução | Até 100 chamadas simultâneas de comandos e expressões, contadas em conjunto pelo interpretador. O limite considera a forma da AST, não o total de comandos ou iterações já executados. Uma soma extensa pode atingir esse limite sem parênteses aninhados. |
+| Iterações | Mantido o limite padrão de 10.000 por execução de cada laço, configurável pela API `max_iteracoes`; atingir o limite não demonstra que o programa é infinito. |
+| Arquivo de entrada | UTF-8. Bytes inválidos produzem mensagem de leitura na saída de erro e código de saída 2. |
+
+Os limites numéricos evitam depender do limite de conversão decimal da versão
+do Python. As proteções globais do interpretador Python não são desativadas.
+Se a pilha disponível do ambiente for menor que a necessária mesmo dentro dos
+limites fixados, `RecursionError` é traduzido especificamente em diagnóstico de
+profundidade; outros erros de programação não são capturados genericamente.
+
+Os diagnósticos de limites sintáticos e de execução usam linha e coluna e saem
+pela CLI com código 1, como os demais erros MiniLang. A classificação de um
+literal extenso como sintático indica a etapa que aplica a restrição; os seus
+dígitos continuam sendo reconhecidos como token `INT` pelo lexer.
+
+Os limites são de tamanho e profundidade locais, não um orçamento global de
+tempo ou memória. O núcleo obrigatório da linguagem e os exemplos usuais foram
+preservados. Os testes verificam fronteiras aceitas e rejeitadas.
+
+## 7. Referências conceituais
+
+- [Cornell CS 4120 — Top-down (LL) parsing](https://www.cs.cornell.edu/courses/cs4120/2026sp/notes/topdown/): critério de escolhas preditivas por FIRST/FOLLOW aplicado na seção 2.
+- [Cornell CS 4120 — Automating Lexical Analysis](https://www.cs.cornell.edu/courses/cs4120/2026sp/notes/leximpl/): relação entre padrões regulares e autômatos aplicada na seção 5.5. O código deste projeto usa construção direta da tabela.
+
+Referências consultadas na revisão de 28/11/2026; a gramática e as escolhas
+específicas acima descrevem a implementação MiniLang deste grupo.
