@@ -9,3 +9,6 @@ venv/
 .idea/
 htmlcov/
 .coverage
+
+# Instrucoes locais de entrega (nao versionar)
+*_NAO_COMMITAR.md
